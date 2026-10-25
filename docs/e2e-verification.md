@@ -43,7 +43,7 @@
 
 ```bash
 # 直连 + 代理双链路（完整日志见 .e2e/logs/，断言逐条打印）
-E:/GLM/mcp-compress-proxy/.venv/Scripts/python.exe scripts/e2e_mcp_git.py
+<PROJECT_DIR>/.venv/Scripts/python.exe scripts/e2e_mcp_git.py
 # → ===== E2E ALL PASS =====，退出码 0，临时仓库自动清理
 
 # pytest 门控形式
