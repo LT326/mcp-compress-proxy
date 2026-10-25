@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# 本地运行产物：嵌套 git 仓库 / uv 缓存 / 基准数据 / 配置备份 —— 绝不入库
+.e2e/
+
+# 可逆存储 SQLite
+*.db
+*.sqlite
+
+# 生成物：benchmark fixtures（tests/fixtures/gen_fixtures.py 固定种子可复现）
+tests/fixtures/*.json
+tests/fixtures/*.txt
+
+# 介绍视频与渲染代码（本地素材，不入库）
+docs/intro.mp4
+scripts/make_intro_video.py

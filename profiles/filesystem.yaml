@@ -1,0 +1,51 @@
+# filesystem server 压缩 Profile v1.0（阶段四）
+#
+# 语义：白名单（同 git.yaml 头注）。
+# payload 形状：list_dir → {path, entries[]}；read_file → {path, content, size, mtime}。
+# debug 对 content 用「错误锚点保留」而非截断（text_rules.error_anchor）。
+server: filesystem
+ref_strategy: store_full_payload
+task_profiles:
+  debug:
+    retain:
+      - {path: path, priority: critical}
+      - {path: error, priority: critical}
+      - {path: mtime}
+      - {path: size}
+      - {path: "entries[*].path", priority: high}
+    drop:
+      - "entries[*].mtime"
+      - "entries[*].size"
+      - "entries[*].permissions"
+    text_rules:
+      - {field: content, mode: error_anchor, keywords: [error, exception, traceback], context: 3}
+
+  review:
+    retain:
+      - {path: path}
+      - {path: mtime}
+      - {path: size}
+      - {path: "entries[*].path", priority: critical}
+      - {path: "entries[*].size", priority: critical}
+      - {path: "entries[*].mtime", priority: critical}
+    drop:
+      - content
+      - "entries[*].permissions"
+
+  explore:
+    retain:
+      - {path: path}
+      - {path: "entries[*].path", priority: critical}
+      - {path: "entries[*].size"}
+    drop:
+      - content
+      - "entries[*].mtime"
+      - "entries[*].permissions"
+
+  fallback:
+    retain:
+      - {path: path, priority: critical}
+      - {path: error, priority: critical}
+      - {path: mtime}
+      - {path: size}
+      - {path: "entries[0:3]"}

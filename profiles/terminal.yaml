@@ -1,0 +1,56 @@
+# terminal server 压缩 Profile v1.0（阶段四）
+#
+# R5（always_preserve_error_signals）：
+#   非零退出码行 / FAILED / ERROR / Traceback 信号行 + 其后 5 行，
+#   无论 task_type 一律 100% 保留 —— 引擎在每条 text_rule 结果之上强制并入。
+# payload 形状：{command, stdout, stderr, exit_code}。
+server: terminal
+ref_strategy: store_full_payload
+always_preserve_error_signals: true
+task_profiles:
+  debug:
+    # 完整错误块；非错误 stdout 只留前 20 行 + 后 20 行
+    retain:
+      - {path: command, priority: critical}
+      - {path: exit_code, priority: critical}
+    drop:
+      - stdout
+      - stderr
+    text_rules:
+      - {field: stdout, mode: head_tail, head: 20, tail: 20}
+      - {field: stderr, mode: error_anchor, keywords: [traceback, error, failed, assert, exception], context: 5}
+
+  review:
+    # 退出码 + 失败测试名称 + 错误摘要；通过日志全丢
+    retain:
+      - {path: command, priority: critical}
+      - {path: exit_code, priority: critical}
+    drop:
+      - stdout
+      - stderr
+    text_rules:
+      - {field: stdout, mode: error_only, keywords: [FAILED, ERROR, "short test summary", "exit code", "returned non-zero"]}
+      - {field: stderr, mode: error_only, keywords: [traceback, error, failed, assert, exception]}
+
+  explore:
+    # 退出码 + 前 10 行 stdout；stderr 无错误信号则整字段丢弃
+    retain:
+      - {path: exit_code, priority: critical}
+      - {path: command}
+    drop:
+      - stdout
+      - stderr
+    text_rules:
+      - {field: stdout, mode: head_tail, head: 10, tail: 0}
+      - {field: stderr, mode: error_only, keywords: [error, traceback, failed]}
+
+  fallback:
+    retain:
+      - {path: command, priority: critical}
+      - {path: exit_code, priority: critical}
+    drop:
+      - stdout
+      - stderr
+    text_rules:
+      - {field: stdout, mode: head_tail, head: 50, tail: 50}
+      - {field: stderr, mode: head_tail, head: 50, tail: 50}

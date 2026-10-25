@@ -1,0 +1,100 @@
+# git server 压缩 Profile v1.2（P0 优化：意图感知 + 块级摘要）
+#
+# 语义（白名单）：task profile 只要有 retain，压缩结果就只包含 retain 命中路径；
+# 未列出的字段一律视为 dropped（sw-ref 可回溯取回）。drop 列表为声明性说明，
+# 真正生效的是 retain 白名单。
+# 兼容两种 payload 形状：git log（commits[]）与 git diff（files[]）。
+# text_rules.field 支持路径表达式（commits[*].message / commits[0:5].message）。
+#
+# skip_compression_if（窄意图调用原样透传，不压缩不入库）：
+#   指定 revision 的 git_show / 指定 target 的 git_diff = 精确查询；
+#   git_log 且 max_count<=20 = 小窗口精确查询（args_le 要求参数存在且 ≤ 阈值）。
+#
+# commit_digest（output 文本规则）：git_log 式文本按块摘要为每条一行
+#   `Commit: <hash> | <author> | <message首行>`（数数/列清单免取回），
+#   非日志文本（<2 个块）自动回退 head_tail(30/10)。
+server: git
+ref_strategy: store_full_payload
+skip_compression_if:
+  - tool: git_show
+  - tool: git_diff
+  - tool: git_log
+    args_le: {max_count: 20}
+ref_strategy: store_full_payload
+task_profiles:
+  debug:
+    # 调试：最近 3 个 commit 完整信息 + 全部 diff 的元数据（前 3 个文件的 hunk 全留）
+    retain:
+      - {path: repository}
+      - {path: total}
+      - {path: "commits[0:3].hash", priority: critical}
+      - {path: "commits[0:3].message", priority: critical}
+      - {path: "commits[0:3].diff_stat", priority: high}
+      - {path: "commits[0:3].author"}
+      - {path: "commits[0:3].date"}
+      - {path: base}
+      - {path: head}
+      - {path: summary}
+      - {path: "files[*].path", priority: critical}
+      - {path: "files[*].status", priority: high}
+      - {path: "files[*].additions"}
+      - {path: "files[*].deletions"}
+      - {path: "files[0:3].diff", priority: critical}
+    drop:
+      - "commits[3:].message"
+      - "commits[3:].diff_stat"
+      - "commits[*].diff"
+      - "commits[*].tree"
+      - "commits[*].parent_hashes"
+      - "files[3:].diff"
+    text_rules:
+      - {field: output, mode: commit_digest, fallback: {head: 30, tail: 10}}
+
+  review:
+    # 评审：所有 commit 的 hash/author/date + message 首行；diff 内容全丢
+    retain:
+      - {path: repository}
+      - {path: total}
+      - {path: "commits[*].hash", priority: critical}
+      - {path: "commits[*].author", priority: critical}
+      - {path: "commits[*].date", priority: critical}
+      - {path: base}
+      - {path: head}
+      - {path: summary}
+      - {path: "files[*].path", priority: critical}
+      - {path: "files[*].status"}
+      - {path: "files[*].additions"}
+      - {path: "files[*].deletions"}
+    drop:
+      - "commits[*].diff"
+      - "commits[*].tree"
+      - "commits[*].parent_hashes"
+      - "files[*].diff"
+    text_rules:
+      - {field: "commits[*].message", mode: first_line}
+      - {field: output, mode: commit_digest, fallback: {head: 30, tail: 10}}
+
+  explore:
+    # 摸底：最近 5 个 commit 的 hash + message 首行；diff 形状只留文件路径
+    retain:
+      - {path: total}
+      - {path: "commits[0:5].hash", priority: critical}
+      - {path: "files[*].path", priority: critical}
+    drop:
+      - "commits[5:]"
+    text_rules:
+      - {field: "commits[0:5].message", mode: first_line}
+      - {field: output, mode: commit_digest, fallback: {head: 10, tail: 5}}
+
+  fallback:
+    # 未知任务：顶层键 + commits[0:3] 全部字段
+    retain:
+      - {path: repository}
+      - {path: total}
+      - {path: base}
+      - {path: head}
+      - {path: summary}
+      - {path: "commits[0:3]"}
+      - {path: "files[*].path"}
+    text_rules:
+      - {field: output, mode: commit_digest, fallback: {head: 30, tail: 10}}
