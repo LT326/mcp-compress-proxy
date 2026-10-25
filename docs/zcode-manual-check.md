@@ -1,16 +1,16 @@
 # ZCode 手动接入确认清单（2 分钟）
 
-> 前置已全部就绪：配置 `E:\GLM\.zcode\config.json`、demo 仓库
-> `E:\GLM\mcp-compress-proxy\.e2e\demo-repo`（21 commits）、uv 缓存已热。
+> 前置已全部就绪：配置 `<工作区>\.zcode\config.json`、demo 仓库
+> `<PROJECT_DIR>\.e2e\demo-repo`（21 commits）、uv 缓存已热。
 > 你只需要：重启 ZCode → 确认连接 → 调两次工具 → 截 3 张图。
 
 ## 1. 完全退出 ZCode
 
 托盘图标右键 → 退出（只关窗口进程可能还在）。
 
-## 2. 重新打开 ZCode，工作区必须是 `E:\GLM`
+## 2. 重新打开 ZCode，工作区必须是 `<工作区>`
 
-配置文件在 `E:\GLM\.zcode\config.json`（工作区级），打开别的文件夹不会加载。
+配置文件在 `<工作区>\.zcode\config.json`（工作区级），打开别的文件夹不会加载。
 
 ## 3. 确认 MCP 连接
 
@@ -21,7 +21,7 @@
 
 ```
 请用 mcp 的 git-compressed 服务器调用 git_log 工具，参数：repo_path 填
-E:\GLM\mcp-compress-proxy\.e2e\demo-repo，max_count 填 20。
+<PROJECT_DIR>\.e2e\demo-repo，max_count 填 20。
 把工具的原始输出完整贴出来，不要总结。
 ```
 
@@ -42,12 +42,12 @@ E:\GLM\mcp-compress-proxy\.e2e\demo-repo，max_count 填 20。
 
 ## 6. 连不上时（按顺序）
 
-1. 确认工作区是 `E:\GLM`，且 `E:\GLM\.zcode\config.json` 存在。
+1. 确认工作区是 `<工作区>`，且 `<工作区>\.zcode\config.json` 存在。
 2. 记下 MCP 面板显示的错误信息。
 3. 开 cmd/PowerShell 直接跑（与 ZCode 无关的独立验证）：
-   `E:\GLM\mcp-compress-proxy\.venv\Scripts\python.exe E:\GLM\mcp-compress-proxy\scripts\e2e_mcp_git.py`
+   `<PROJECT_DIR>\.venv\Scripts\python.exe <PROJECT_DIR>\scripts\e2e_mcp_git.py`
    - 输出 `E2E ALL PASS` → 命令链没问题，是 ZCode 拉起环境的问题 →
-     把 `E:\GLM\mcp-compress-proxy\.e2e\logs\proxy.stderr.log` 内容发出来。
+     把 `<PROJECT_DIR>\.e2e\logs\proxy.stderr.log` 内容发出来。
    - 脚本报错 → 把最后 20 行发出来。
 
 ## 已知点

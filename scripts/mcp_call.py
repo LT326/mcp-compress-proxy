@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -25,7 +26,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from zcode_entry import _patch_env  # noqa: E402  复用注册表 PATH / GIT_PYTHON_GIT_EXECUTABLE 修复
 
-SERVER_EXE = r"C:\Users\a\.local\bin\mcp-server-git.exe"
+_patch_env()
+SERVER_EXE = shutil.which("mcp-server-git") or "mcp-server-git"
 VENV_PY = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 BENCH_DIR = PROJECT_ROOT / ".e2e" / "real-bench"
 DEFAULT_REPO = BENCH_DIR / "real-repo"

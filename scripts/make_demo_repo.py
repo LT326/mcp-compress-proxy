@@ -1,13 +1,16 @@
 """创建 ZCode 接入演示用的固定小仓库 .e2e/demo-repo（幂等：已存在则跳过）。"""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1] / ".e2e" / "demo-repo"
-GIT = r"E:\Git\Git\cmd\git.exe"
-if not os.path.isfile(GIT):
-    GIT = "git"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from zcode_entry import _patch_env  # noqa: E402
+
+_patch_env()
+GIT = shutil.which("git") or "git"
 
 
 def run(*args: str) -> None:

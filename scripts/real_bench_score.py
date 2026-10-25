@@ -6,8 +6,9 @@ import json
 import re
 from pathlib import Path
 
-BENCH = Path(r"E:\GLM\mcp-compress-proxy\.e2e\real-bench")
-OUT = Path(r"E:\GLM\mcp-compress-proxy\tests\benchmark\real_sessions_report_v2.md")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BENCH = PROJECT_ROOT / ".e2e" / "real-bench"
+OUT = PROJECT_ROOT / "tests" / "benchmark" / "real_sessions_report_v2.md"
 
 # v1（P0 优化前）结果，硬编码用于对比；明细见 real_sessions_report.md 与 answers-v1/
 V1 = {"direct_tokens": 517580, "compressed_tokens": 635592, "retrieve_calls": 6,

@@ -10,12 +10,19 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-GIT = r"E:\Git\Git\cmd\git.exe"
-REPO = Path(r"E:\GLM\mcp-compress-proxy\.e2e\real-bench\real-repo")
-OUT = Path(r"E:\GLM\mcp-compress-proxy\.e2e\real-bench\tasks.json")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from zcode_entry import _patch_env  # noqa: E402
+
+_patch_env()
+GIT = shutil.which("git") or "git"
+REPO = PROJECT_ROOT / ".e2e" / "real-bench" / "real-repo"
+OUT = PROJECT_ROOT / ".e2e" / "real-bench" / "tasks.json"
 
 
 def git(*args: str) -> str:

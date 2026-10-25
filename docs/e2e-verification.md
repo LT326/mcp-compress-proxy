@@ -11,11 +11,11 @@
 | 组件 | 版本 | 说明 |
 |---|---|---|
 | Windows | 10.0.26200 x64 | |
-| Python | 3.12.9（E:\python-312；项目 venv 同源） | |
+| Python | 3.12.9（<Python安装目录>；项目 venv 同源） | |
 | mcp-server-git | **2026.10.19**（PyPI，固定版本） | 官方 git MCP server |
 | mcp Python SDK | 2.3.0（venv 内，代理侧） | |
 | uv / uvx | 0.12.13 | 拉起 mcp-server-git |
-| git | 2.51.0.windows.1（E:\Git\Git\cmd） | mcp-server-git 经 GitPython 调用它 |
+| git | 2.51.0.windows.1（<Git安装目录>\cmd） | mcp-server-git 经 GitPython 调用它 |
 | node/npm | **不需要**（旧方案 npm 包已死，见 §2） | |
 
 ## 2. 关键核验事实（不凭记忆，全部实测）
@@ -36,7 +36,7 @@
    `output` 文本规则（head_tail），短输出不改写不注入 sw-ref。
 6. **本机网络**：`uv` 直连 `pypi.org/simple` 超时 → 必须 `UV_INDEX_URL`
    指清华镜像；`pypi.org/pypi/*.json` 偶尔可达但不可依赖。
-7. **本机 PATH**：ZCode agent 进程未继承 `E:\Node`、`E:\Git\Git\cmd`
+7. **本机 PATH**：ZCode agent 进程未继承 `<Node安装目录>`、`<Git安装目录>\cmd`
    （在注册表用户 PATH 中）→ E2E 脚本内置注册表 PATH 扫描兜底。
 
 ## 3. 实际执行的命令与结果摘要
@@ -92,7 +92,7 @@ set MCP_E2E=1 && .venv\Scripts\python.exe -m pytest tests/test_e2e_git.py -v
 
 ## 5. ZCode 接入（2026-10-25 实测通过）
 
-配置：用户级 `C:\Users\a\.zcode\cli\config.json`（与工作区 `E:\GLM\.zcode\config.json`
+配置：用户级 `<用户主目录>\.zcode\cli\config.json`（与工作区 `<工作区>\.zcode\config.json`
 同内容，同名时用户级优先）：venv python → `scripts/zcode_entry.py`（环境修复入口）
 → 代理 → 固化版 `mcp-server-git.exe` → `.e2e\demo-repo`（21 commits）。
 
@@ -113,7 +113,7 @@ set MCP_E2E=1 && .venv\Scripts\python.exe -m pytest tests/test_e2e_git.py -v
   `rmdir /s /q <路径>`。
 - `.e2e/`：`uv-cache`（uv 环境缓存，可删，下次重建约 30s）、`logs/`（server
   stderr 日志）、`zcode_refs.db`（ZCode 链路的 sw-ref 库）、`demo-repo`（演示仓库）。
-- ZCode 接入：删除 `E:\GLM\.zcode\config.json` 中的 `git-compressed` 条目即可。
+- ZCode 接入：删除 `<工作区>\.zcode\config.json` 中的 `git-compressed` 条目即可。
 
 ## 7. 已知限制 / 未验证项
 

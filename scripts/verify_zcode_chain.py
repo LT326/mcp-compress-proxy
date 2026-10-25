@@ -5,17 +5,23 @@ env 刻意只给 SystemRoot（无 PATH/TEMP/APPDATA），比 ZCode 实际环境�
 """
 
 import json
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
-PY = r"E:\GLM\mcp-compress-proxy\.venv\Scripts\python.exe"
-LAUNCHER = r"E:\GLM\mcp-compress-proxy\scripts\zcode_entry.py"
-SERVER_EXE = r"C:\Users\a\.local\bin\mcp-server-git.exe"
-DB = r"E:\GLM\mcp-compress-proxy\.e2e\verify_refs.db"
-REPO = r"E:\GLM\mcp-compress-proxy\.e2e\demo-repo"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from zcode_entry import _patch_env  # noqa: E402
+
+_patch_env()  # 补注册表 PATH 后再发现 git / mcp-server-git
+PY = str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+LAUNCHER = str(PROJECT_ROOT / "scripts" / "zcode_entry.py")
+SERVER_EXE = shutil.which("mcp-server-git") or "mcp-server-git"
+DB = str(PROJECT_ROOT / ".e2e" / "verify_refs.db")
+REPO = str(PROJECT_ROOT / ".e2e" / "demo-repo")
 
 CMD = [PY, LAUNCHER, "--server", "git", "--db", DB, "--", SERVER_EXE, "--repository", REPO]
 
@@ -81,15 +87,24 @@ def run_case(label, env):
         names = [t["name"] for t in tools]
         print(f"  tools: {len(names)} (retrieve_original={'retrieve_original' in names})")
         assert "retrieve_original" in names and "git_log" in names
+        # 小窗口（max_count=20）→ 窄意图：原样透传，无 sw-ref
+        log20 = c.request("tools/call", {
+            "name": "git_log", "arguments": {"repo_path": REPO, "max_count": 20},
+        })
+        text20 = log20["result"]["content"][0]["text"]
+        print(f"  git_log(20): {len(text20)} chars, "
+              f"passthrough={'sw-ref:' not in text20}, has_latest={'demo: add note 20' in text20}")
+        assert "demo: add note 20" in text20 and "sw-ref:" not in text20, "narrow query should pass through"
+
+        # 宽扫（max_count=30 > 20）→ commit_digest 块级摘要
         log = c.request("tools/call", {
-            "name": "git_log",
-            "arguments": {"repo_path": REPO, "max_count": 20},
+            "name": "git_log", "arguments": {"repo_path": REPO, "max_count": 30},
         })
         text = log["result"]["content"][0]["text"]
         compressed = "sw-ref:" in text
-        print(f"  git_log: {len(text)} chars, compressed={compressed}, "
-              f"omitted_marker={'lines omitted (sw-compressed)' in text}")
-        assert "demo: initial readme" in text or compressed, "git_log content unexpected"
+        print(f"  git_log(30): {len(text)} chars, compressed={compressed}, "
+              f"digest={'| SW Demo |' in text}")
+        assert compressed and "| SW Demo |" in text, "wide scan should be digested"
 
         if compressed:
             import re
