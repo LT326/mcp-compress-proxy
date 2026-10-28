@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sqlite3
@@ -77,6 +78,26 @@ def resolve_field(payload: Any, field_path: str) -> tuple[bool, Any]:
     return True, node
 
 
+def _parse_text_wrapper(payload: Any) -> Any | None:
+    """{"output": "<json 或 python repr>"} → 解析后的结构；失败返回 None。"""
+    if not (
+        isinstance(payload, dict)
+        and set(payload.keys()) == {"output"}
+        and isinstance(payload["output"], str)
+    ):
+        return None
+    text = payload["output"].strip()
+    if not text or text[0] not in "[{":
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return None
+
+
 def retrieve_original(
     store: SqliteStore,
     ref_id: str,
@@ -100,7 +121,13 @@ def retrieve_original(
     if field_path:
         ok, value = resolve_field(payload, field_path)
         if not ok:
-            return {"ok": False, "error": f"path not found: {field_path}"}
+            # 文本包装（如 sqlite 的 Python repr 数组）：解析后再按字段路径取，
+            # 这样字段访问不必依赖「把原文转成 JSON 存进去」。
+            parsed = _parse_text_wrapper(payload)
+            if parsed is not None:
+                ok, value = resolve_field(parsed, field_path)
+            if not ok:
+                return {"ok": False, "error": f"path not found: {field_path}"}
     if isinstance(value, dict) and set(value.keys()) == {"output"} and isinstance(value["output"], str):
         value = value["output"]  # 代理的 {"output": text} 文本包装 → 解包
 

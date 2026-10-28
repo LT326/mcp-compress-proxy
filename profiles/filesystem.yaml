@@ -1,12 +1,29 @@
-# filesystem server 压缩 Profile v1.0（阶段四）
+# filesystem server 压缩 Profile v1.1（2026-10-28：对齐真实 server 的文本输出）
 #
-# 语义：白名单（同 git.yaml 头注）。
-# payload 形状：list_dir → {path, entries[]}；read_file → {path, content, size, mtime}。
-# debug 对 content 用「错误锚点保留」而非截断（text_rules.error_anchor）。
+# 两种 payload 形状并存：
+#   1. 真实 @modelcontextprotocol/server-filesystem 2.x：工具输出是纯文本
+#      （list_directory → "[DIR] name" 行；read_text_file → 文件内容；search_files
+#      → "path:line: text"）。代理按 {"output": text} 包装后走下面的 output 规则。
+#   2. 阶段四的合成 JSON 形状（{path, entries[]} / {path, content}）：保留原有
+#      retain 白名单，供 benchmark 与旧 client 兼容。
+#
+# text_rules 的 tools 作用域（engine.rule_applies）解决「同一 server 内读文件与
+# 列目录形态完全不同」的问题：读文件按内容策略，列目录按行数策略。
+# error_anchor 未命中时用 fallback 兜底为 head_tail，避免整字段被清空。
 server: filesystem
 ref_strategy: store_full_payload
+# 输出很短 / 本身就是状态确认的工具：原样透传，不压缩不入库（R18 skip 语义）
+skip_compression_if:
+  - tool: list_allowed_directories
+  - tool: get_file_info
+  - tool: create_directory
+  - tool: write_file
+  - tool: edit_file
+  - tool: move_file
+
 task_profiles:
   debug:
+    # JSON 形状：路径 + mtime/size，条目只留路径
     retain:
       - {path: path, priority: critical}
       - {path: error, priority: critical}
@@ -18,9 +35,28 @@ task_profiles:
       - "entries[*].size"
       - "entries[*].permissions"
     text_rules:
-      - {field: content, mode: error_anchor, keywords: [error, exception, traceback], context: 3}
+      # JSON 形状（旧 client / benchmark）：content 用错误锚点保留
+      - field: content
+        mode: error_anchor
+        keywords: [error, exception, traceback]
+        context: 3
+        fallback: {mode: head_tail, head: 40, tail: 20}
+      # 读文件（真实文本）：错误锚点 + 上下文；没有错误信号时留头 40 / 尾 20 行
+      - field: output
+        tools: [read_text_file, read_file, read_multiple_files]
+        mode: error_anchor
+        keywords: [error, exception, traceback, "raise ", "assert", "failed"]
+        context: 4
+        fallback: {mode: head_tail, head: 40, tail: 20}
+      # 列目录 / 搜索：保留头 80 + 尾 20 行
+      - field: output
+        tools: [list_directory, list_directory_with_sizes, directory_tree, search_files]
+        mode: head_tail
+        head: 80
+        tail: 20
 
   review:
+    # JSON 形状：条目元数据全保留（评审要看文件规模）
     retain:
       - {path: path}
       - {path: mtime}
@@ -31,8 +67,21 @@ task_profiles:
     drop:
       - content
       - "entries[*].permissions"
+    text_rules:
+      # 评审要读代码：留头 120 / 尾 40
+      - field: output
+        tools: [read_text_file, read_file, read_multiple_files]
+        mode: head_tail
+        head: 120
+        tail: 40
+      - field: output
+        tools: [list_directory, list_directory_with_sizes, directory_tree, search_files]
+        mode: head_tail
+        head: 120
+        tail: 20
 
   explore:
+    # JSON 形状：只看目录结构
     retain:
       - {path: path}
       - {path: "entries[*].path", priority: critical}
@@ -41,6 +90,19 @@ task_profiles:
       - content
       - "entries[*].mtime"
       - "entries[*].permissions"
+    text_rules:
+      # 摸底：文件内容留头 60 / 尾 20
+      - field: output
+        tools: [read_text_file, read_file, read_multiple_files]
+        mode: head_tail
+        head: 60
+        tail: 20
+      # 目录列表：头 100 / 尾 20，足够判断结构且能数出规模
+      - field: output
+        tools: [list_directory, list_directory_with_sizes, directory_tree, search_files]
+        mode: head_tail
+        head: 100
+        tail: 20
 
   fallback:
     retain:
@@ -49,3 +111,14 @@ task_profiles:
       - {path: mtime}
       - {path: size}
       - {path: "entries[0:3]"}
+    text_rules:
+      - field: output
+        tools: [read_text_file, read_file, read_multiple_files]
+        mode: head_tail
+        head: 60
+        tail: 60
+      - field: output
+        tools: [list_directory, list_directory_with_sizes, directory_tree, search_files]
+        mode: head_tail
+        head: 100
+        tail: 40

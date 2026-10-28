@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import json
 import shutil
@@ -26,7 +27,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from ..compressor.engine import compress, default_db_path
+from ..compressor.engine import compress, default_db_path, rule_applies
 from ..profiles.loader import DEFAULT_PROFILES_DIR, load_profile
 from ..store.sqlite_store import SqliteStore
 from ..task_context.detector import TaskType, detect
@@ -216,27 +217,75 @@ class Proxy:
         # 窄意图调用（如指定 revision 的 git_show）：原样透传，不压缩不入库
         if self.profile.should_skip(tool, args):
             return result
+        # compress_only_tools：工具面很大的 server 只压白名单内的工具
+        if not self.profile.should_compress_tool(tool):
+            return result
         task_type = detect(list(self.context))
         contents = result.get("content")
         if not isinstance(contents, list):
             return result
+        replaced_text = False
         for item in contents:
             if not isinstance(item, dict) or item.get("type") != "text":
                 continue
             text = item.get("text", "")
             try:
+                payload = None
+                is_python_repr = False
                 try:
                     payload = json.loads(text)
                 except (json.JSONDecodeError, ValueError):
-                    payload = None
+                    # mcp-server-sqlite 输出的是 Python repr（单引号）而非 JSON；
+                    # 只有 profile 显式声明 parse_python_literals 才解析，
+                    # 且 SQLite 里仍存原文（ref_payload），保证逐字节还原。
+                    if self.profile.parse_python_literals and text.lstrip()[:1] in "[{":
+                        try:
+                            payload = ast.literal_eval(text)
+                            is_python_repr = True
+                        except (ValueError, SyntaxError):
+                            payload = None
+                # 文本内容一律存原文（JSON 也存）：retrieve 默认返回与 server
+                # 逐字符一致的文本；字段路径由 retrieve 内部解析文本实现。
+                ref_payload = {"output": text}
+                text_only = self.profile.is_text_only(tool)
+                if text_only and isinstance(payload, (dict, list)):
+                    continue  # 多形态工具：JSON 走透传，只有文本形态才压缩
                 if isinstance(payload, dict):
-                    compressed = compress(payload, self.profile, task_type, store=self.store)
+                    compressed = compress(
+                        payload,
+                        self.profile,
+                        task_type,
+                        store=self.store,
+                        tool=tool,
+                        ref_payload=ref_payload,
+                    )
                     item["text"] = json.dumps(
                         compressed.compressed_payload, ensure_ascii=False
                     )
-                elif self._has_output_text_rule(task_type):
+                    replaced_text = True
+                elif isinstance(payload, list) and self.profile.array_envelope:
+                    compressed = compress(
+                        payload,
+                        self.profile,
+                        task_type,
+                        store=self.store,
+                        tool=tool,
+                        ref_payload=ref_payload,
+                    )
+                    rows = compressed.compressed_payload.get(self.profile.array_envelope)
+                    # 行数没有被裁掉就不改写：避免给 3 行结果套一层信封 + sw_ref
+                    if isinstance(rows, list) and len(rows) < len(payload):
+                        item["text"] = json.dumps(
+                            compressed.compressed_payload, ensure_ascii=False
+                        )
+                        replaced_text = True
+                elif self._has_output_text_rule(task_type, tool):
                     wrapped = compress(
-                        {"output": text}, self.profile, task_type, store=self.store
+                        {"output": text},
+                        self.profile,
+                        task_type,
+                        store=self.store,
+                        tool=tool,
                     )
                     new_text = wrapped.compressed_payload.get("output")
                     if isinstance(new_text, str) and new_text != text:
@@ -244,18 +293,48 @@ class Proxy:
                             f"{new_text}\n[sw-compressed; original: {wrapped.ref_id}"
                             " — call retrieve_original]"
                         )
+                        replaced_text = True
             except Exception as exc:  # fail-open：压缩失败不影响代理可用性
                 print(f"[sw-proxy] compress failed ({exc}); passthrough", file=sys.stderr)
+        if replaced_text:
+            self._compress_structured(result, task_type, tool)
         return result
 
-    def _has_output_text_rule(self, task_type: TaskType) -> bool:
+    def _compress_structured(self, result: dict, task_type: TaskType, tool: str | None) -> None:
+        """压缩 structuredContent（MCP 2025-06+ 的机器可读副本）。
+
+        真实 server（filesystem / memory）会同时返回 text 与 structuredContent；
+        只压 text 会留下完整副本，token 收益归零。仅在 text 确实被压缩后执行，
+        且失败一律保留原值（fail-open）。
+        """
+        structured = result.get("structuredContent")
+        try:
+            if isinstance(structured, dict):
+                compressed = compress(
+                    structured, self.profile, task_type, store=self.store, tool=tool
+                )
+                result["structuredContent"] = compressed.compressed_payload
+            elif isinstance(structured, list) and self.profile.array_envelope:
+                compressed = compress(
+                    structured, self.profile, task_type, store=self.store, tool=tool
+                )
+                rows = compressed.compressed_payload.get(self.profile.array_envelope)
+                if isinstance(rows, list) and len(rows) < len(structured):
+                    result["structuredContent"] = compressed.compressed_payload
+        except Exception as exc:  # fail-open
+            print(f"[sw-proxy] structured compress failed ({exc}); passthrough", file=sys.stderr)
+
+    def _has_output_text_rule(self, task_type: TaskType, tool: str | None = None) -> bool:
         task_name = task_type.value if isinstance(task_type, TaskType) else str(task_type)
         task_profile = self.profile.for_task(task_name) or self.profile.task_profiles.get(
             "fallback"
         )
         if task_profile is None:
             return False
-        return any(rule.get("field") == "output" for rule in task_profile.text_rules)
+        return any(
+            rule.get("field") == "output" and rule_applies(rule, tool)
+            for rule in task_profile.text_rules
+        )
 
     # ---------- 输出 ----------
 

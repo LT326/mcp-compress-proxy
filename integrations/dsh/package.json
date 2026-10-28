@@ -1,0 +1,46 @@
+{
+  "name": "dsh-plugin-mcp-compress-proxy",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness bundle: route MCP tool output through a task-aware, reversible compression proxy (git / filesystem / memory / sqlite / github)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "compression",
+    "cordis",
+    "token-savings",
+    "retrieval"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": "LT326",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LT326/mcp-compress-proxy.git",
+    "directory": "integrations/dsh"
+  },
+  "homepage": "https://github.com/LT326/mcp-compress-proxy/blob/main/integrations/dsh/README.md",
+  "bugs": {
+    "url": "https://github.com/LT326/mcp-compress-proxy/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.1"
+  }
+}

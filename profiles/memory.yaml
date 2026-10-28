@@ -1,0 +1,57 @@
+# memory server 压缩 Profile v1.0（2026-10-28）
+#
+# 目标 server：@modelcontextprotocol/server-memory（knowledge graph）。
+# 输出形态（真实实测）：read_graph / search_nodes / open_nodes 返回 JSON 文本
+#   {
+#     "entities":  [{name, entityType, observations: [str, ...]}],
+#     "relations": [{from, to, relationType}]
+#   }
+# 代理把 JSON 文本解析成 dict 后走 retain 白名单：实体名与关系全保留，
+# observations（最占 token 的部分）按任务只留前 N 条，其余入 sw-ref。
+#
+# observations 往往是“解释性长文本”，正符合「大输出 + 概览型消费」的压缩边界；
+# 需要逐条原文时用 retrieve_original 的 field_path / lines / grep 部分取回。
+server: memory
+ref_strategy: store_full_payload
+# 写操作 / 删除操作的返回只是确认信息，压缩没有收益：原样透传
+skip_compression_if:
+  - tool: create_entities
+  - tool: create_relations
+  - tool: add_observations
+  - tool: delete_entities
+  - tool: delete_observations
+  - tool: delete_relations
+
+task_profiles:
+  debug:
+    # 排查：实体名/类型 + 每条实体前 4 条观察（线索通常在最前面）+ 全部关系
+    retain:
+      - {path: "entities[*].name", priority: critical}
+      - {path: "entities[*].entityType", priority: critical}
+      - {path: "entities[*].observations[0:4]", priority: critical}
+      - {path: "relations[*].from", priority: critical}
+      - {path: "relations[*].to", priority: critical}
+      - {path: "relations[*].relationType", priority: high}
+
+  review:
+    # 评审/核对：实体清单 + 关系图；观察只留首条作为摘要
+    retain:
+      - {path: "entities[*].name", priority: critical}
+      - {path: "entities[*].entityType", priority: critical}
+      - {path: "entities[*].observations[0:1]"}
+      - {path: "relations[*]", priority: critical}
+
+  explore:
+    # 摸底：只要图谱骨架（实体名/类型 + 关系），observations 全丢
+    retain:
+      - {path: "entities[*].name", priority: critical}
+      - {path: "entities[*].entityType", priority: critical}
+      - {path: "relations[*]", priority: critical}
+
+  fallback:
+    # 未知任务：前 3 个实体（各留前 2 条观察）+ 前 3 条关系
+    retain:
+      - {path: "entities[0:3].name", priority: critical}
+      - {path: "entities[0:3].entityType"}
+      - {path: "entities[0:3].observations[0:2]"}
+      - {path: "relations[0:3]"}

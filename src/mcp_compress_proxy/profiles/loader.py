@@ -7,12 +7,25 @@ Profile 对象可按 task_type 返回对应的 retain/drop 规则（TaskProfile�
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
-DEFAULT_PROFILES_DIR = Path(__file__).resolve().parents[3] / "profiles"
+def _resolve_default_profiles_dir() -> Path:
+    """源码树优先；pip 安装后回退到 <prefix>/share/mcp-compress-proxy/profiles。"""
+    repo = Path(__file__).resolve().parents[3] / "profiles"
+    if repo.is_dir():
+        return repo
+    for prefix in (sys.prefix, sys.base_prefix):
+        candidate = Path(prefix) / "share" / "mcp-compress-proxy" / "profiles"
+        if candidate.is_dir():
+            return candidate
+    return repo
+
+
+DEFAULT_PROFILES_DIR = _resolve_default_profiles_dir()
 
 
 @dataclass
@@ -43,9 +56,30 @@ class Profile:
     ref_strategy: str = "store_full_payload"
     always_preserve_error_signals: bool = False
     skip_rules: list[SkipRule] = field(default_factory=list)
+    # 数组载荷：工具输出顶层是 JSON/Python 数组时，用该键包成 {"<key>": [...]}
+    # 再套 retain 规则；未声明则数组原样透传（保守）。
+    array_envelope: str | None = None
+    # 某些 server（如 mcp-server-sqlite）输出的是 Python repr（单引号），
+    # 声明后代理会先 ast.literal_eval 解析，但 SQLite 里仍存原文（无损）。
+    parse_python_literals: bool = False
+    # 工具面很大的 server（如 GitHub MCP 有 40+ 工具、输出形状各异）：
+    # 声明后只压缩列表里的工具，其余一律透传，避免白名单把未知形状清空。
+    compress_only_tools: list[str] = field(default_factory=list)
+    # 多形态工具（如 pull_request_read：get=JSON / get_diff=文本 diff）：
+    # 声明为 text_only 后跳过 JSON 压缩，只走 output 文本规则。
+    text_only_tools: list[str] = field(default_factory=list)
 
     def for_task(self, task_type: str) -> TaskProfile | None:
         return self.task_profiles.get(task_type)
+
+    def is_text_only(self, tool: str | None) -> bool:
+        return bool(tool) and tool in self.text_only_tools
+
+    def should_compress_tool(self, tool: str | None) -> bool:
+        """compress_only_tools 未声明时全部可压缩；声明后只放行列出的工具。"""
+        if not self.compress_only_tools:
+            return True
+        return bool(tool) and tool in self.compress_only_tools
 
     def should_skip(self, tool: str | None, arguments: dict | None) -> bool:
         """该调用是否为窄意图（精确查询）→ 原样透传，不压缩不入库。"""
@@ -93,6 +127,10 @@ def load_profile(server_name: str, profiles_dir: Path | str | None = None) -> Pr
         },
         ref_strategy=data.get("ref_strategy", "store_full_payload"),
         always_preserve_error_signals=bool(data.get("always_preserve_error_signals", False)),
+        array_envelope=data.get("array_envelope"),
+        parse_python_literals=bool(data.get("parse_python_literals", False)),
+        compress_only_tools=list(data.get("compress_only_tools") or []),
+        text_only_tools=list(data.get("text_only_tools") or []),
         skip_rules=[
             SkipRule(tool=r.get("tool", ""), args_le=dict(r.get("args_le") or {}))
             for r in (data.get("skip_compression_if") or [])

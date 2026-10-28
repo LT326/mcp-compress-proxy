@@ -5,8 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcp-compress-proxy"
 version = "0.1.0"
-description = "Task-aware transparent MCP compression proxy for git / filesystem / terminal servers"
+description = "Task-aware transparent MCP compression proxy with reversible sw-ref retrieval (git / filesystem / memory / sqlite / github)"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "LT326" }]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.0",
@@ -18,8 +20,18 @@ dependencies = [
 panel = ["fastapi>=0.110"]  # 可选：调试面板
 dev = ["pytest>=7.4"]
 
+[project.urls]
+Homepage = "https://github.com/LT326/mcp-compress-proxy"
+Repository = "https://github.com/LT326/mcp-compress-proxy"
+Issues = "https://github.com/LT326/mcp-compress-proxy/issues"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# 压缩规则是数据：装成 wheel 时把 profiles/*.yaml 放到 <prefix>/share/，
+# loader 会在源码树之外回退到该目录（pip 安装后才能找到 Profile）。
+[tool.setuptools.data-files]
+"share/mcp-compress-proxy/profiles" = ["profiles/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

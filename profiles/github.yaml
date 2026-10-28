@@ -1,0 +1,174 @@
+# GitHub MCP server 压缩 Profile v1.0（2026-10-28）
+#
+# 目标 server：官方 github/github-mcp-server（Go 二进制，stdio），实测 v2.0.3。
+# 工具面很大（40+），输出形状因工具而异：列表接口是 JSON 数组或
+# {total_count, items[]}，写入接口是短确认。因此本 profile 用
+# compress_only_tools 明确「只压哪几个高噪音读工具」，其余一律透传，
+# 避免白名单把未知形状清空。
+#
+# 实测形状（v2.0.3）：
+#   search_repositories → {total_count, incomplete_results, items:[repo...]}
+#   list_issues         → {issues:[{number,title,body,state,user,labels,...}]}
+#   search_issues       → {total_count, items:[...]}（body 很长）
+#   list_pull_requests  → [{number,title,body,state,user,head,base,...}]（顶层数组）
+#   list_commits        → [{sha,html_url,commit:{message,...},author,...}]（顶层数组）
+#
+# 顶层数组走 array_envelope: rows（输出 {"rows": [...], "sw_ref": ...}）。
+# body / commit.message 是主要噪音：debug 保留前 25 行，review/explore 只留首行。
+server: github
+ref_strategy: store_full_payload
+array_envelope: rows
+compress_only_tools:
+  - list_issues
+  - search_issues
+  - search_pull_requests
+  - search_repositories
+  - list_pull_requests
+  - list_commits
+  # 多形态工具：method=get_diff 返回文本 diff（压缩），其余 method 返回 JSON（透传）
+  - pull_request_read
+text_only_tools:
+  - pull_request_read
+
+task_profiles:
+  debug:
+    # 排查：编号/标题/状态/标签/时间 + body 前 25 行（尾部 5 行兜底）
+    retain:
+      - {path: total_count}
+      - {path: incomplete_results}
+      - {path: "issues[*].number", priority: critical}
+      - {path: "issues[*].title", priority: critical}
+      - {path: "issues[*].state"}
+      - {path: "issues[*].html_url"}
+      - {path: "issues[*].user.login"}
+      - {path: "issues[*].labels"}
+      - {path: "issues[*].comments"}
+      - {path: "issues[*].created_at"}
+      - {path: "issues[*].updated_at"}
+      - {path: "items[*].number", priority: critical}
+      - {path: "items[*].title", priority: critical}
+      - {path: "items[*].state"}
+      - {path: "items[*].html_url"}
+      - {path: "items[*].user.login"}
+      - {path: "items[*].labels"}
+      - {path: "items[*].comments"}
+      - {path: "items[*].created_at"}
+      - {path: "items[*].updated_at"}
+      - {path: "items[*].full_name"}
+      - {path: "items[*].description"}
+      - {path: "items[*].language"}
+      - {path: "items[*].stargazers_count"}
+      - {path: "items[*].forks_count"}
+      - {path: "items[*].open_issues_count"}
+      - {path: "rows[*].number", priority: critical}
+      - {path: "rows[*].title", priority: critical}
+      - {path: "rows[*].state"}
+      - {path: "rows[*].draft"}
+      - {path: "rows[*].merged"}
+      - {path: "rows[*].html_url"}
+      - {path: "rows[*].user.login"}
+      - {path: "rows[*].created_at"}
+      - {path: "rows[*].updated_at"}
+      - {path: "rows[*].head.ref"}
+      - {path: "rows[*].base.ref"}
+      - {path: "rows[*].sha", priority: critical}
+      - {path: "rows[*].commit.message", priority: critical}
+      - {path: "rows[*].commit.author.name"}
+      - {path: "rows[*].commit.author.date"}
+      - {path: "rows[*].author.login"}
+      - {path: "rows[*].committer.login"}
+    text_rules:
+      - {field: "issues[*].body", mode: head_tail, head: 25, tail: 5}
+      - {field: "items[*].body", mode: head_tail, head: 25, tail: 5}
+      - {field: "rows[*].body", mode: head_tail, head: 25, tail: 5}
+      # PR diff（pull_request_read method=get_diff）：调试保留大半 diff
+      - {field: output, mode: head_tail, head: 200, tail: 50}
+
+  review:
+    # 评审：只要编号/标题/状态/标签 + body 首行（正文细节按需 retrieve）
+    retain:
+      - {path: total_count}
+      - {path: incomplete_results}
+      - {path: "issues[*].number", priority: critical}
+      - {path: "issues[*].title", priority: critical}
+      - {path: "issues[*].state"}
+      - {path: "issues[*].html_url"}
+      - {path: "issues[*].user.login"}
+      - {path: "issues[*].labels"}
+      - {path: "issues[*].comments"}
+      - {path: "issues[*].updated_at"}
+      - {path: "items[*].number", priority: critical}
+      - {path: "items[*].title", priority: critical}
+      - {path: "items[*].state"}
+      - {path: "items[*].html_url"}
+      - {path: "items[*].labels"}
+      - {path: "items[*].comments"}
+      - {path: "items[*].updated_at"}
+      - {path: "items[*].full_name"}
+      - {path: "items[*].description"}
+      - {path: "items[*].language"}
+      - {path: "items[*].stargazers_count"}
+      - {path: "items[*].forks_count"}
+      - {path: "rows[*].number", priority: critical}
+      - {path: "rows[*].title", priority: critical}
+      - {path: "rows[*].state"}
+      - {path: "rows[*].html_url"}
+      - {path: "rows[*].user.login"}
+      - {path: "rows[*].created_at"}
+      - {path: "rows[*].updated_at"}
+      - {path: "rows[*].sha", priority: critical}
+      - {path: "rows[*].commit.message", priority: critical}
+      - {path: "rows[*].author.login"}
+    text_rules:
+      - {field: "issues[*].body", mode: first_line}
+      - {field: "items[*].body", mode: first_line}
+      - {field: "rows[*].body", mode: first_line}
+      - {field: "rows[*].commit.message", mode: first_line}
+      # PR diff：评审保留头 150 / 尾 50 行
+      - {field: output, mode: head_tail, head: 150, tail: 50}
+
+  explore:
+    # 摸底：标题/编号/状态/仓库名 + commit 首行；正文一律不进
+    retain:
+      - {path: total_count}
+      - {path: "issues[*].number", priority: critical}
+      - {path: "issues[*].title", priority: critical}
+      - {path: "issues[*].state"}
+      - {path: "issues[*].updated_at"}
+      - {path: "items[*].number"}
+      - {path: "items[*].title"}
+      - {path: "items[*].full_name", priority: critical}
+      - {path: "items[*].description"}
+      - {path: "items[*].language"}
+      - {path: "rows[*].number"}
+      - {path: "rows[*].title"}
+      - {path: "rows[*].state"}
+      - {path: "rows[*].sha", priority: critical}
+      - {path: "rows[*].commit.message"}
+    text_rules:
+      - {field: "rows[*].commit.message", mode: first_line}
+      # PR diff：摸底只留头 80 / 尾 20 行
+      - {field: output, mode: head_tail, head: 80, tail: 20}
+
+  fallback:
+    # 未知任务：前 3 条 + 正文首行（不把整页 body 带进上下文）
+    retain:
+      - {path: total_count}
+      - {path: "issues[0:3].number", priority: critical}
+      - {path: "issues[0:3].title", priority: critical}
+      - {path: "issues[0:3].state"}
+      - {path: "items[0:3].number"}
+      - {path: "items[0:3].title"}
+      - {path: "items[0:3].full_name"}
+      - {path: "rows[0:3].number"}
+      - {path: "rows[0:3].title"}
+      - {path: "rows[0:3].state"}
+      - {path: "rows[0:3].sha"}
+      - {path: "rows[0:3].commit.message"}
+    text_rules:
+      - {field: "issues[0:3].body", mode: first_line}
+      - {field: "items[0:3].body", mode: first_line}
+      - {field: "rows[0:3].body", mode: first_line}
+      - {field: "rows[0:3].commit.message", mode: first_line}
+      # PR diff：未知任务保留头 120 / 尾 40 行
+      - {field: output, mode: head_tail, head: 120, tail: 40}

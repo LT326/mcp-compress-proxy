@@ -2,9 +2,9 @@
 
 任务感知的 MCP 透明压缩代理（Task-Aware MCP Compression Proxy）。
 
-面向 ZCode / Claude Code / Cursor 等 MCP 客户端：代理拉起原始 MCP server
-（第一版支持 git，filesystem / terminal profile 已就绪），按任务意图用 YAML Profile
-驱动字段级压缩；被丢弃的数据落入 SQLite，可随时通过注入的 `retrieve_original`
+面向 ZCode / Claude Code / Cursor / DeepSeek Harness 等 MCP 客户端：代理拉起原始
+MCP server（已实测 git / filesystem / memory / sqlite / github，terminal profile 就绪），按任务意图用
+YAML Profile 驱动字段级压缩；被丢弃的数据落入 SQLite，可随时通过注入的 `retrieve_original`
 工具无损取回（全量 / 子字段 / 行区间 / grep 部分取回）。
 
 - 架构约束与迭代记录：见 [AGENTS.md](AGENTS.md)
@@ -20,7 +20,7 @@
 git clone https://github.com/LT326/mcp-compress-proxy.git
 cd mcp-compress-proxy
 uv venv && uv pip install -e ".[dev]"
-python -m pytest tests/ -v          # 50 个测试应全绿
+python -m pytest tests/ -v          # 87 个测试应全绿
 ```
 
 安装要代理的 server（以官方 git server 为例，固定版本）：
@@ -72,6 +72,22 @@ uv tool install "mcp-server-git==2026.10.19"   # 大陆网络可加 --index-url 
 python scripts/verify_zcode_chain.py
 ```
 
+## 接入 DeepSeek Harness（DSH）
+
+DSH 没有独立的 MCP 配置段：MCP 接入由 profile 里的 cordis 插件行
+（`@deepseek-ai/dsh-mcp-client`）完成。仓库内已带好接线：
+
+```powershell
+.venv\Scripts\python.exe scripts\install_dsh_plugin.py --servers git --git-repo <YOUR_REPO>
+.venv\Scripts\python.exe scripts\verify_dsh_chain.py    # 按 DSH 的 spawn 方式自检
+```
+
+- bundle 形态：`integrations/dsh/`（`dsh plugin --profile desktop add file:<PROJECT_DIR>\integrations\dsh`，
+  再把包名加进 profile `dsh.profile.bundles`）
+- 原理、环境变量、排障与边界：[docs/dsh-integration.md](docs/dsh-integration.md)
+- 安装器幂等、可 `--remove` 撤销；写 profile patch 会触发 DSH 配置热重载，
+  请在会话之间执行。
+
 ## 使用行为
 
 - **窄意图查询原样透传**（`git_show` / `git_diff` / `max_count≤20` 的 `git_log`）——
@@ -84,11 +100,23 @@ python scripts/verify_zcode_chain.py
 - 压缩规则全部在 `profiles/*.yaml`（声明式，改 YAML 不改代码）；终端类输出启用
   R5：错误信号（非零退出码 / Traceback / FAILED）无论任务类型 100% 保留。
 - 代理 fail-open：压缩路径任何异常一律透传原始结果，不影响可用性。
+- 同一 server 内按工具区分策略：`text_rules.tools` / `skip_compression_if`（如
+  filesystem 的 `read_text_file` 走内容规则、`list_directory` 走行数规则）。
+- 数组载荷（sqlite 的查询结果）：profile 声明 `array_envelope: rows` 后压缩成
+  `{"rows": [...], "sw_ref": ...}`；行数没被裁掉时原样透传。sqlite 的 Python repr
+  由 `parse_python_literals: true` 解析，原文仍逐字节可还原；取某行某列用
+  `retrieve_original` 的 `field_path`（如 `57.name`）。
+- 工具面很大的 server（GitHub 40+ 工具、输出形状各异）用 `compress_only_tools`
+  只压高噪音读工具（issue/PR/commit/repo 列表），其余原样透传；多形态工具用
+  `text_only_tools` 只压文本形态（如 PR diff），JSON 形态保持原样。
+- `structuredContent` 与 text 一起压缩（只压 text 会留下完整副本，收益归零）。
 
 ## 真实 E2E（可复跑）
 
 ```bash
 .venv\Scripts\python.exe scripts\e2e_mcp_git.py            # 直连 + 经代理双链路（真实 mcp-server-git）
+.venv\Scripts\python.exe scripts\e2e_mcp_extra.py          # filesystem + memory + sqlite 双链路
+.venv\Scripts\python.exe scripts\e2e_mcp_github.py         # GitHub（需 token + 官方二进制）
 set MCP_E2E=1 && .venv\Scripts\python.exe -m pytest tests\test_e2e_git.py -v
 ```
 
@@ -110,6 +138,8 @@ ZCode 图形端手把手确认清单见 [docs/zcode-manual-check.md](docs/zcode-
 - 测试：`python -m pytest tests/ -v`（默认不含真实网络 E2E，`MCP_E2E=1` 开启）
 - 真实会话基准工具链：`scripts/real_bench_prepare.py`（任务+ground truth 生成）、
   `scripts/mcp_call.py`（双臂 helper）、`scripts/real_bench_score.py`（计分报告）
+- 发布到 PyPI / npm / DSH 插件市场：[docs/publishing.md](docs/publishing.md)
+  （`scripts/publish_release.py` 一条命令校验并发布）
 
 ## License
 

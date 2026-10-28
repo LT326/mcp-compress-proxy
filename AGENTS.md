@@ -10,7 +10,7 @@
 ZCode / Claude Code / Cursor 等 MCP 客户端。
 
 差异化：不是通用 JSON 压缩，而是根据**当前任务类型**（debug / review / explore）
-选择不同的字段保留策略，对 git、filesystem、terminal 三类 MCP server 做专用压缩。
+选择不同的字段保留策略，对 git、filesystem、terminal、memory、sqlite、github 六类 MCP server 做专用压缩。
 
 ## 不可协商的架构约束（共 7 条）
 
@@ -23,7 +23,9 @@ ZCode / Claude Code / Cursor 等 MCP 客户端。
 5. 代理层必须是**透明 stdio 代理**：客户端指向代理的 command，代理 spawn 原始
    MCP server 子进程，转发请求，仅修改 `tools/call` 的响应（以及 `initialize` /
    `tools/list` 返回的工具列表，用于注入 `retrieve_original`）。
-6. 第一版只支持 **git、filesystem、terminal** 三个 server，不做 GitHub / Postgres。
+6. 支持 **git、filesystem、terminal、memory、sqlite、github** 六个 server
+   （memory / sqlite / github 于 2026-10-28 经用户批准加入）；Postgres 仍不做。
+   新增 server 必须同时交付 Profile + 测试 + 真实 E2E，不允许只写 Profile 就宣称“支持”。
 7. 所有对原始 payload 的修改必须记录在 `transform_manifest` 中，保证 write-back
    操作的 lossless 逆向重建。
 
@@ -43,6 +45,9 @@ mcp-compress-proxy/
 ├── profiles/                  # 每个 server 一份 YAML Profile
 │   ├── git.yaml
 │   ├── filesystem.yaml
+│   ├── memory.yaml
+│   ├── sqlite.yaml
+│   ├── github.yaml
 │   └── terminal.yaml
 └── tests/
     ├── fixtures/              # 真实 MCP 输出样本（阶段四）
@@ -62,6 +67,25 @@ mcp-compress-proxy/
 - 真实 E2E（已完成，2026-10-24）：官方 mcp-server-git==2026.10.19 直连+代理双链路全过，
   详见 docs/e2e-verification.md；ZCode 真实接入亦实测通过（2026-10-25：connected、
   git_log 压缩、retrieve_original 完整还原；期间修掉三个真 bug，见 docs §4 与 R15/R16）。
+- DeepSeek Harness 接入（已完成代码与自检，2026-10-28）：新增
+  `integrations/dsh/` bundle + `scripts/install_dsh_plugin.py`（写 profile 的
+  cordis 受管块）+ `scripts/verify_dsh_chain.py`（按 DSH spawn 方式走官方 MCP SDK
+  2026-07-28 验证）。实测：handshake → tools/list（retrieve_original）→ git_log 压缩
+  → retrieve_original 完整还原，resultType=complete。server 面未变（仍 git /
+  filesystem / terminal；随后另加 memory，见下条）。详见 docs/dsh-integration.md 与 R19。
+- filesystem 真实化 + memory 接入（2026-10-28）：filesystem profile v1.1 对齐真实
+  文本输出（[DIR]/[FILE] 行）并用 text_rules.tools 区分读文件/列目录；新增 memory
+  profile（知识图谱 JSON retain）；代理同步压缩 structuredContent；E2E 实测 147KB
+  源码 → 5.8KB、220 行目录 → 142 行、知识图谱 8.6KB → 1.7KB，全部可 retrieve 完整
+  还原（docs/e2e-verification.md §8，tests/test_profiles_real_shapes.py）。
+- sqlite + 数组载荷（2026-10-28）：新增 profiles/sqlite.yaml；Profile 增加
+  array_envelope / parse_python_literals；代理支持 JSON 数组与 Python repr 数组，
+  输出 {"rows": [...], "sw_ref": ...}；E2E 实测 120 行查询 19822→8274 chars，
+  retrieve 还原原始 Python repr 文本（docs §8，tests/test_array_payloads.py）。
+- GitHub 接入（2026-10-28）：官方 github-mcp-server v2.0.3（Go，stdio）；新增
+  profiles/github.yaml 与 compress_only_tools 白名单；E2E 实测 issues 30989→421、
+  PRs 62036→504、commits 20418→559、repos 5811→190 chars，均可 retrieve 还原
+  （docs §8，tests/test_github_profile.py）。
 
 ## Rules 摘要（长会话中必须重复声明）
 
@@ -111,5 +135,115 @@ mcp-compress-proxy/
   `hash | 作者 | message首行`，非日志文本回退 head_tail）。复测：retrieve 6→0、
   成功率 10/10 vs 10/10、深扫任务 token 改善 31-34% 且持平/优于直连；总 token
   +15.6% 的剩余差距经分解为三个 n=1 行为方差（剔除后 -0.8% 持平）。
+
+
+
+- R19 DeepSeek Harness 接入（2026-10-28 实测，DSH 0.2.1-rc.3）：
+  ①DSH 没有独立 MCP 配置段——一个 MCP server 就是 profile `cordis.patch.yml` 里
+  的一条 `@deepseek-ai/dsh-mcp-client` 插件行（`serverName/transport/command/args`），
+  `insert` 列表插入；工具名是 `mcp__<serverName>__<tool>`，serverName 必须匹配
+  `[A-Za-z0-9_-]{1,32}` 且同 scope 唯一。
+  ②profile 目录 = `$DSH_PROFILE_DIR`（本机 `~/.dsh/profiles/desktop`）；`dsh` CLI 不在
+  PATH 上，但可用 `ELECTRON_RUN_AS_NODE=1 <app>\DeepSeek Harness.exe
+  <app.asar>\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js` 调用（`--dump-config`
+  可用，但 `--profile desktop` 被 Electron 应用独占而拒绝）；`dsh plugin` 只转发
+  给 pnpm，不改 `dsh.profile.bundles`。配置默认 HMR 热重载 → 写 patch 会触发
+  重新组合，必须在会话之间执行。
+  ③DSH 的 stdio 客户端**先起一个临时 probe 进程再起 serving 进程**，代理必须能
+  被重复握手；不要假设进程只被拉起一次。
+  ④`cordis.patch.yml` 方言是 js-yaml JSON_SCHEMA + `!!js`（**仅标量**）：
+  `!!js 'expr'` 在加载时用 `with(ctx)` 求值，`process` 可用；`args: !!js '[...]'`
+  也可以（表达式求值成数组），但 `!!js` 不能直接标注序列节点。
+  ⑤接入进程链固定为 `python scripts/dsh_entry.py → mcp_compress_proxy.proxy →`
+  真实 server；`dsh_entry.py` 复用 `zcode_entry._patch_env`（R15 的 PATH/git 修复）。
+  ⑥自检命令 `scripts/verify_dsh_chain.py`（用 mcp 2.3.0 客户端，LATEST=2026-07-28；
+  实测 mcp-server-git 协商到 2025-11-25）。DSH 端工具列表出现即接入成功；
+  `retrieve_original` 的 `resultType` 仍须为 `complete`（R16）。
+  ⑦安装器 `scripts/install_dsh_plugin.py` 只改 `# >>> mcp-compress-proxy` 受管块，
+  幂等、写前备份；静态 bundle 在 `integrations/dsh/`，靠环境变量启用，不烘死路径。
+
+
+
+- R20 filesystem / memory 真实化（2026-10-28 实测）：
+  ①真实 filesystem server（npm @modelcontextprotocol/server-filesystem 2.0.1）输出是
+  纯文本（[DIR] name / [FILE] name / 文件原文 / key: value），v1.0 JSON profile 在
+  真实 server 上从未触发压缩；v1.1 用 text_rules.tools 作用域（读文件 vs 列目录）+
+  skip_compression_if（get_file_info / write_file 等）对齐真实形态。
+  ②text_rules 新增两个声明式能力：tools / exclude_tools（同一 server 内按工具区分）
+  与 fallback（error_anchor / error_only 未命中时回退 head_tail）。二者都只在 YAML
+  声明，引擎不硬编码；compress(..., tool=...) 为可选参数，tool=None 时不做工具限制
+  （benchmark / 旧调用保持原行为，见 tests/test_profiles_real_shapes.py）。
+  ③structuredContent 必须与 text 一起压缩：filesystem / memory 会同时返回 text 与
+  结构化副本，只压 text 会让完整副本留在结果里，token 收益归零。代理仅在 text 确实被
+  压缩后，对 dict 形态的 structuredContent 套同一 profile；失败 fail-open。
+  ④memory server（npm @modelcontextprotocol/server-memory 2.0.0）的 read_graph /
+  search_nodes / open_nodes 返回 {entities:[{name,entityType,observations[]}],
+  relations:[{from,to,relationType}]} JSON 文本；写操作用 skip 规则透传。
+  ⑤实测量化（scripts/e2e_mcp_extra.py，2026-10-28）：list_directory 4409→2904 chars
+  （220→142 行）、read_text_file 147598→5800 chars（约 25×）、read_graph 8643→1676
+  chars；三者 retrieve_original 均逐字节还原。
+
+
+
+- R21 sqlite / 数组载荷（2026-10-28 实测）：
+  ①mcp-server-sqlite（PyPI 0.1.0）输出是 **Python repr**（`[{'id': 1, ...}]`，单引号），
+  不是 JSON；read_query / list_tables / describe_table 都是。仅当 profile 声明
+  `parse_python_literals: true` 时代理才 `ast.literal_eval`；SQLite 里仍存**原始文本**
+  （`compress(..., ref_payload={"output": text})`），retrieve 逐字节还原。
+  ②顶层数组载荷：profile 声明 `array_envelope: <key>` 后，engine 把 list 包成
+  `{<key>: [...]}` 再套 retain；输出是 `{"<key>": [...], "sw_ref": ...}`（数组本身
+  放不下 sw_ref，信封是必要代价）。未声明 envelope 的 profile 遇到数组一律透传（保守）。
+  ③行数没被裁掉时不改写：避免给 3 行结果套信封 + sw_ref（proxy 里比较 rows 长度）。
+  ④`compress()` 新增可选 `ref_payload`（存什么）与 `tool`（工具作用域）；
+  `_canonical` / `make_ref_id` 接受 list；manifest 的 dropped_paths 去掉 envelope
+  前缀（`rows[3].id` → `[3].id`），与原始数组下标对齐。
+  ⑤mcp-server-sqlite 0.1.0 与 mcp 2.x 不兼容（调用已删除的 `Server.list_resources`，
+  启动即 AttributeError）→ 必须 `uvx --with "mcp<2" mcp-server-sqlite`；DSH 安装器
+  `resolve_server("sqlite")` 已内置这一参数。
+  ⑥实测（scripts/e2e_mcp_extra.py）：120 行 × 3 列 19822 chars（Python repr）→ 8274
+  chars（JSON 信封，fallback 前 50 行）；retrieve 默认与直连文本逐字符一致，
+  也可以 `field_path="57.name"` 直接取某行某列（文本包装内部按 repr 解析）；
+  `list_tables` 走 skip 规则原样透传。
+
+
+
+- R22 GitHub 接入 / compress_only_tools（2026-10-28 实测）：
+  ①官方 server 是 Go 二进制 `github/github-mcp-server`（v2.0.3，`stdio` 子命令），
+  46 个工具、输出形状随工具而异（列表可能是顶层数组，也可能是
+  `{total_count, items[]}` / `{issues: []}`）。安装方式：
+  `gh release download v2.0.3 -R github/github-mcp-server
+  -p github-mcp-server_Windows_x86_64.zip -D .e2e/tools/github` 后解压；
+  `.e2e/` 已 gitignore，安装器可用 `MCP_GITHUB_SERVER_EXE` 覆盖。
+  ②工具面大的 server 必须用 `compress_only_tools`：未列出的工具一律透传，
+  避免白名单把未知形状清空（GitHub 只压 list_issues / search_issues /
+  search_pull_requests / search_repositories / list_pull_requests / list_commits）。
+  ③`list_commits` / `list_pull_requests` 是顶层数组 → 走
+  `array_envelope: rows`；issue/PR/commit 的 `body` / commit.message 是主要噪音，
+  debug 留前 25 行、review/explore 只留首行。
+  ④Token：DSH 的 mcp-client 会滤掉环境里 `/KEY|PASSWORD|SECRET|TOKEN/` 形状的变量，
+  所以全局 `GITHUB_PERSONAL_ACCESS_TOKEN` 不一定能透传；`scripts/dsh_entry.py`
+  在 `--server github` 且环境无 token 时执行 `gh auth token` 取一次（不落配置）。
+  没有 gh 的用户需要在 MCP 行里显式配 `env`。
+  ⑤代理现在对**所有文本内容**都按 `{"output": text}` 存原文（JSON 也存），
+  retrieve 默认返回与 server 逐字符一致的文本；`field_path` 由 retrieve 内部
+  解析 JSON / Python repr 后取（文本包装增强）。结构化 `structuredContent` 仍存结构。
+  ⑥实测（scripts/e2e_mcp_github.py，cli/cli）：list_issues 30989→421 chars、
+  list_pull_requests 62036→504、list_commits 20418→559、search_repositories 5811→190；
+  retrieve 还原完整 issues 文本，get_me 原样透传。
+
+
+
+- R23 多形态工具 / text_only_tools（2026-10-28）：
+  ①一个工具返回多种形态时（GitHub `pull_request_read`：method=get 返回 JSON、
+  method=get_diff 返回文本 diff），不能只用 compress_only_tools——JSON 会走白名单
+  被清空。Profile 的 `text_only_tools` 声明后，代理对该工具的 JSON dict/list 跳过
+  压缩（原样透传），只走 output 文本规则，于是 diff 能压、JSON 不受影响。
+  ②github.yaml：`pull_request_read` 同时进 compress_only_tools 与 text_only_tools；
+  diff 规则按任务 head_tail（debug 200/50、review 150/50、explore 80/20、fallback
+  120/40），压缩后带 `sw-compressed` 标记，retrieve 还原完整 diff。
+  ③实测（cli/cli PR #14846，205 行 diff）：10763→8640 chars（该 diff 较小；行数越多
+  收益越大，极端大 diff 可到 90%+）。method=get 的 JSON 逐字符透传。
+  ④未做的部分：`pull_request_read` 的 get_files / get_comments 等 JSON 形态仍透传；
+  要做需要按参数路由 retain（目前只有文本路径按工具区分）。
 
 <!-- 阶段二起，新发现的边界与失败模式追加在此行之下 -->

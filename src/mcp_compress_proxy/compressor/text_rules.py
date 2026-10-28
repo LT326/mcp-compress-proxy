@@ -125,6 +125,21 @@ def compress_text(rule: dict[str, Any], text: str, always_preserve: bool) -> str
     else:
         raise ValueError(f"unknown text rule mode: {mode!r}")
 
+    # error_anchor / error_only 没命中任何行时，可声明 fallback（如 head_tail），
+    # 避免整字段被清空后只能原样透传（filesystem 的 read_text_file 需要）。
+    if not keep:
+        fallback = rule.get("fallback") or {}
+        fallback_mode = fallback.get("mode")
+        if fallback_mode == "head_tail":
+            head, tail = int(fallback.get("head", 20)), int(fallback.get("tail", 20))
+            if len(lines) <= head + tail:
+                keep |= set(range(len(lines)))
+            else:
+                keep |= set(range(head)) | set(range(len(lines) - tail, len(lines)))
+        elif fallback_mode == "first_line":
+            if lines:
+                keep |= {0}
+
     if always_preserve:
         keep |= protected_indices(lines)
 

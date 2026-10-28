@@ -1,0 +1,45 @@
+# sqlite server 压缩 Profile v1.0（2026-10-28）
+#
+# 目标 server：PyPI mcp-server-sqlite（uvx，0.1.0）。
+# 真实输出形态（实测）：
+#   read_query / list_tables / describe_table 返回 **Python repr**（单引号）：
+#     [{'id': 1, 'name': 'item0', 'payload': 'xxx...'}, ...]
+#   不是合法 JSON —— 所以本 profile 声明 parse_python_literals: true，代理用
+#   ast.literal_eval 解析后压缩，但 SQLite 里仍存原始文本，retrieve 逐字节还原。
+#
+# 数组载荷：retain 规则以 rows 信封表达（"rows[0:50]"），压缩结果返回
+#   {"rows": [...], "sw_ref": "sw-ref:..."}；行数没被裁掉时原样透传（不套信封）。
+#
+# 当前策略是「按行数截断 + 可逆取回」：列名因查询而异，无法在 YAML 里枚举；
+# 需要某一行/某几行时用 retrieve_original 的 lines / grep / field_path 取回。
+server: sqlite
+ref_strategy: store_full_payload
+array_envelope: rows
+parse_python_literals: true
+# 结构查询与写操作返回很小（表名列表 / 列定义 / 成功提示）：原样透传
+skip_compression_if:
+  - tool: create_table
+  - tool: list_tables
+  - tool: describe_table
+  - tool: append_insight
+
+task_profiles:
+  debug:
+    # 排查：先看前 30 行，命中行不够再 retrieve
+    retain:
+      - {path: "rows[0:30]", priority: critical}
+
+  review:
+    # 评审 / 核对：前 100 行
+    retain:
+      - {path: "rows[0:100]"}
+
+  explore:
+    # 摸底：前 50 行足够判断规模与字段
+    retain:
+      - {path: "rows[0:50]"}
+
+  fallback:
+    # 未知任务（代理看不到对话原文时的常态）：前 50 行
+    retain:
+      - {path: "rows[0:50]"}

@@ -38,11 +38,11 @@ class CompressedResult:
     transform_manifest: dict = field(default_factory=dict)
 
 
-def _canonical(payload: dict) -> str:
+def _canonical(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def make_ref_id(payload: dict) -> str:
+def make_ref_id(payload: Any) -> str:
     digest = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()[:12]
     return f"sw-ref:{digest}"
 
@@ -63,14 +63,39 @@ def _whitelist_build(payload: dict, task_profile: TaskProfile) -> dict:
     return out
 
 
-def _apply_text_rules(payload: dict, compressed: dict, profile: Profile, task_profile: TaskProfile) -> None:
+def rule_applies(rule: dict, tool: str | None) -> bool:
+    """工具级作用域（YAML 声明）：tools / exclude_tools。
+
+    tool 未知（如 benchmark 直接调用 compress）时不做限制，保持旧行为。
+    """
+    if tool is not None:
+        tools = rule.get("tools")
+        if tools is not None and tool not in tools:
+            return False
+        exclude = rule.get("exclude_tools")
+        if exclude and tool in exclude:
+            return False
+    return True
+
+
+def _apply_text_rules(
+    payload: dict,
+    compressed: dict,
+    profile: Profile,
+    task_profile: TaskProfile,
+    tool: str | None = None,
+) -> None:
     """text_rules 的 field 支持路径表达式：content / stdout / commits[*].message 等。
 
     规则从原始 payload 取值，压缩后写回 compressed（None = 整字段丢弃）。
+    text_rule 可选 tools / exclude_tools，用于同一 server 内按工具区分策略
+    （例如 filesystem 的 read_text_file 与 list_directory 输出形态完全不同）。
     """
     for rule in task_profile.text_rules:
         field = rule.get("field")
         if not field:
+            continue
+        if not rule_applies(rule, tool):
             continue
         for concrete, value in paths.extract(payload, field):
             if not isinstance(value, str):
@@ -82,15 +107,43 @@ def _apply_text_rules(payload: dict, compressed: dict, profile: Profile, task_pr
                 paths.set_path(compressed, concrete, new_text)
 
 
+def _format_leaf(leaf_path: tuple, envelope: str | None) -> str:
+    """数组信封内的路径去掉信封前缀（rows[0].id → [0].id），与原始数组对齐。"""
+    formatted = paths.format_path(leaf_path)
+    if envelope and formatted.startswith(envelope):
+        formatted = formatted[len(envelope):].lstrip(".")
+    return formatted
+
+
 def compress(
-    payload: dict,
+    payload: dict | list,
     profile: Profile,
     task_type: TaskType | str,
     store: SqliteStore | None = None,
+    tool: str | None = None,
+    ref_payload: dict | list | None = None,
 ) -> CompressedResult:
+    """按 Profile 压缩 payload；返回（含 sw_ref 的）压缩结果。
+
+    数组载荷：profile.array_envelope 声明后，payload 会包成 {"<envelope>": [...]}
+    再套 retain 规则，输出仍是该信封对象（数组本身放不下 sw_ref）。
+    ref_payload：要写入 SQLite 的原始数据；None 表示就是 payload。文本载荷
+    （如 sqlite 的 Python repr）用它保存原文，保证 retrieve 逐字节还原。
+    """
     task_name = task_type.value if isinstance(task_type, TaskType) else str(task_type)
-    original_json = _canonical(payload)
-    ref_id = make_ref_id(payload)
+    raw_payload = payload
+    envelope = profile.array_envelope
+    enveloped = False
+    if isinstance(payload, list):
+        if not envelope:
+            raise ValueError(
+                "list payload requires profile.array_envelope to be declared in YAML"
+            )
+        payload = {envelope: payload}
+        enveloped = True
+    original_payload = ref_payload if ref_payload is not None else raw_payload
+    original_json = _canonical(original_payload)
+    ref_id = make_ref_id(original_payload)
 
     task_profile = profile.for_task(task_name)
     strategy = "whitelist"
@@ -102,7 +155,7 @@ def compress(
         strategy = "generic_fallback"
     else:
         compressed = _whitelist_build(payload, task_profile)
-        _apply_text_rules(payload, compressed, profile, task_profile)
+        _apply_text_rules(payload, compressed, profile, task_profile, tool=tool)
 
     # dropped = 原始叶子在压缩结果中取不到、或取到的值已改变
     dropped_paths: list[str] = []
@@ -111,7 +164,7 @@ def compress(
         total_leaves += 1
         ok, current = paths.get_at(compressed, leaf_path)
         if not ok or current != original_value:
-            dropped_paths.append(paths.format_path(leaf_path))
+            dropped_paths.append(_format_leaf(leaf_path, envelope if enveloped else None))
 
     compressed["sw_ref"] = ref_id
 

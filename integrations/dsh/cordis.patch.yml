@@ -1,0 +1,133 @@
+# DeepSeek Harness bundle patch —— 把 MCP server 包在 mcp-compress-proxy 后面。
+#
+# 静态版：不写死本机路径，全部靠环境变量启用。每个 server 一行，未设置对应
+# 环境变量时该行 disabled（不会拉起进程）。想在本机快速接线（自动烘焙绝对路径、
+# 一次配多个 server），用仓库里的 scripts/install_dsh_plugin.py。
+#
+# 前置条件：
+#   1. 安装 Python 包：pip install mcp-compress-proxy
+#      （尚未发布到 PyPI 时：pip install "git+https://github.com/LT326/mcp-compress-proxy"）
+#   2. 让 DSH 用的 python 能 import mcp_compress_proxy；必要时用 MCP_COMPRESS_PYTHON 指定。
+#
+# 环境变量：
+#   MCP_COMPRESS_PYTHON   运行代理的 python（默认 python / python3）
+#   MCP_COMPRESS_DB       sw-ref SQLite 路径（默认 %LOCALAPPDATA%\dsh-mcp-compress\refs.db）
+#   MCP_GIT_REPOSITORY    启用 git 行：被代理的仓库
+#   MCP_GIT_SERVER        git server 可执行文件（默认 mcp-server-git）
+#   MCP_FS_ROOT           启用 filesystem 行：允许访问的根目录
+#   MCP_MEMORY_FILE       启用 memory 行：知识图谱 JSON 路径
+#   MCP_SQLITE_DB         启用 sqlite 行：数据库文件
+#   MCP_GITHUB_SERVER_EXE 启用 github 行：github-mcp-server 可执行文件
+#   GITHUB_PERSONAL_ACCESS_TOKEN  github token（也可由 dsh_entry 从 gh auth token 取）
+- insert:
+    - id: mcp-compress-git
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js '!process.env.MCP_GIT_REPOSITORY'
+      config:
+        serverName: git
+        transport: stdio
+        command: !!js 'process.env.MCP_COMPRESS_PYTHON || (process.platform === "win32" ? "python" : "python3")'
+        args:
+          - '-m'
+          - 'mcp_compress_proxy.proxy'
+          - '--server'
+          - 'git'
+          - '--db'
+          - !!js 'process.env.MCP_COMPRESS_DB || ((process.env.LOCALAPPDATA || process.env.USERPROFILE || ".") + "\\dsh-mcp-compress\\refs.db")'
+          - '--'
+          - !!js 'process.env.MCP_GIT_SERVER || "mcp-server-git"'
+          - '--repository'
+          - !!js 'process.env.MCP_GIT_REPOSITORY || ""'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+
+    - id: mcp-compress-filesystem
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js '!process.env.MCP_FS_ROOT'
+      config:
+        serverName: filesystem
+        transport: stdio
+        command: !!js 'process.env.MCP_COMPRESS_PYTHON || (process.platform === "win32" ? "python" : "python3")'
+        args:
+          - '-m'
+          - 'mcp_compress_proxy.proxy'
+          - '--server'
+          - 'filesystem'
+          - '--db'
+          - !!js 'process.env.MCP_COMPRESS_DB || ((process.env.LOCALAPPDATA || process.env.USERPROFILE || ".") + "\\dsh-mcp-compress\\refs.db")'
+          - '--'
+          - 'npx'
+          - '-y'
+          - '@modelcontextprotocol/server-filesystem'
+          - !!js 'process.env.MCP_FS_ROOT || ""'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+
+    - id: mcp-compress-memory
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js '!process.env.MCP_MEMORY_FILE'
+      config:
+        serverName: memory
+        transport: stdio
+        command: !!js 'process.env.MCP_COMPRESS_PYTHON || (process.platform === "win32" ? "python" : "python3")'
+        args:
+          - '-m'
+          - 'mcp_compress_proxy.proxy'
+          - '--server'
+          - 'memory'
+          - '--db'
+          - !!js 'process.env.MCP_COMPRESS_DB || ((process.env.LOCALAPPDATA || process.env.USERPROFILE || ".") + "\\dsh-mcp-compress\\refs.db")'
+          - '--'
+          - 'npx'
+          - '-y'
+          - '@modelcontextprotocol/server-memory'
+        env:
+          MEMORY_FILE_PATH: !!js 'process.env.MCP_MEMORY_FILE || ""'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+
+    - id: mcp-compress-sqlite
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js '!process.env.MCP_SQLITE_DB'
+      config:
+        serverName: sqlite
+        transport: stdio
+        command: !!js 'process.env.MCP_COMPRESS_PYTHON || (process.platform === "win32" ? "python" : "python3")'
+        args:
+          - '-m'
+          - 'mcp_compress_proxy.proxy'
+          - '--server'
+          - 'sqlite'
+          - '--db'
+          - !!js 'process.env.MCP_COMPRESS_DB || ((process.env.LOCALAPPDATA || process.env.USERPROFILE || ".") + "\\dsh-mcp-compress\\refs.db")'
+          - '--'
+          - 'uvx'
+          - '--with'
+          - 'mcp<2'
+          - 'mcp-server-sqlite'
+          - '--db-path'
+          - !!js 'process.env.MCP_SQLITE_DB || ""'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+
+    - id: mcp-compress-github
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js '!process.env.MCP_GITHUB_SERVER_EXE'
+      config:
+        serverName: github
+        transport: stdio
+        command: !!js 'process.env.MCP_COMPRESS_PYTHON || (process.platform === "win32" ? "python" : "python3")'
+        args:
+          - '-m'
+          - 'mcp_compress_proxy.proxy'
+          - '--server'
+          - 'github'
+          - '--db'
+          - !!js 'process.env.MCP_COMPRESS_DB || ((process.env.LOCALAPPDATA || process.env.USERPROFILE || ".") + "\\dsh-mcp-compress\\refs.db")'
+          - '--'
+          - !!js 'process.env.MCP_GITHUB_SERVER_EXE || ""'
+          - 'stdio'
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: !!js 'process.env.GITHUB_PERSONAL_ACCESS_TOKEN || ""'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
